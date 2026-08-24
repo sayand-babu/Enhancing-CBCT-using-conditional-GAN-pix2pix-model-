@@ -1,137 +1,134 @@
 # Enhancing CBCT using 3D Conditional GAN (Pix2Pix / Vox2Vox)
 
-A deep learning framework for 3D medical image-to-image translation that enhances **Cone Beam Computed Tomography (CBCT)** images into high-quality **Fan-Beam Computed Tomography (CT)**-like volumes using a 3D Conditional Generative Adversarial Network (cGAN / Vox2Vox).
+A PyTorch framework for 3D medical image-to-image translation that enhances Cone Beam Computed Tomography (CBCT) volumes into Fan-Beam Computed Tomography (CT)-like volumes using a 3D Conditional Generative Adversarial Network (cGAN / Vox2Vox).
 
 ---
 
-## 📌 Table of Contents
-- [Overview](#-overview)
-- [Key Features](#-key-features)
-- [Model Architecture](#-model-architecture)
-- [Project Structure](#-project-structure)
-- [Requirements & Installation](#-requirements--installation)
-- [Dataset Preparation](#-dataset-preparation)
-- [Usage Guide](#-usage-guide)
+## Table of Contents
+- [Overview](#overview)
+- [Key Features](#key-features)
+- [Model Architecture](#model-architecture)
+- [Project Structure](#project-structure)
+- [Requirements and Installation](#requirements-and-installation)
+- [Dataset Preparation](#dataset-preparation)
+- [Usage Guide](#usage-guide)
   - [1. Data Preprocessing](#1-data-preprocessing)
-  - [2. Training the Model](#2-training-the-model)
-  - [3. Inference / Volume Synthesis](#3-inference--volume-synthesis)
-  - [4. Evaluation & Quantitative Metrics](#4-evaluation--quantitative-metrics)
-- [Evaluation Metrics & Results](#-evaluation-metrics--results)
-- [Memory Optimization & GPU Setup](#-memory-optimization--gpu-setup)
-- [License & Acknowledgments](#-license--acknowledgments)
+  - [2. Model Training](#2-model-training)
+  - [3. Inference and Volume Synthesis](#3-inference-and-volume-synthesis)
+  - [4. Evaluation and Quantitative Metrics](#4-evaluation-and-quantitative-metrics)
+- [Evaluation Metrics and Results](#evaluation-metrics-and-results)
+- [Memory Optimization and Hardware Notes](#memory-optimization-and-hardware-notes)
+- [References and Acknowledgments](#references-and-acknowledgments)
 
 ---
 
-## 🔬 Overview
+## Overview
 
-Cone Beam Computed Tomography (**CBCT**) is widely used in image-guided radiation therapy (IGRT), dental imaging, and surgical planning due to its low radiation dose and fast acquisition. However, CBCT often suffers from:
-- Increased scatter radiation and noise
-- Lower soft-tissue contrast
-- Artifacts and Hounsfield Unit (HU) inaccuracies
+Cone Beam Computed Tomography (CBCT) is widely used in image-guided radiation therapy (IGRT), dental imaging, and surgical planning due to low radiation dose and fast acquisition. However, CBCT scans frequently exhibit artifacts, high scatter radiation, noise, and low soft-tissue contrast compared to standard planning CT scans.
 
-This project addresses these challenges by implementing a **3D Conditional GAN (Pix2Pix / Vox2Vox)** in PyTorch. The model learns a non-linear mapping from raw/simulated 3D CBCT scans (source domain $B$) to paired ground-truth planning CT scans (target domain $A$).
+This repository implements a 3D conditional GAN architecture (Vox2Vox / 3D Pix2Pix) to learn an end-to-end volumetric mapping from raw/simulated 3D CBCT scans (source domain B) to paired ground-truth planning CT scans (target domain A).
 
 ```
-[ Input CBCT Volume (3D) ] ──▶ [ 3D U-Net Generator ] ──▶ [ Synthesized Enhanced CT (3D) ]
-                                                                 │
-                                                                 ▼
-[ Condition (CBCT) + Real/Fake CT ] ──▶ [ 3D PatchGAN Discriminator ] ──▶ [ Real / Fake Score ]
+[ Input CBCT Volume (3D) ] ---> [ 3D U-Net Generator ] ---> [ Synthesized CT (3D) ]
+                                                                  |
+                                                                  v
+[ Condition (CBCT) + Real/Fake CT ] ---> [ 3D PatchGAN Discriminator ] ---> [ Real / Fake Score ]
 ```
 
 ---
 
-## ✨ Key Features
+## Key Features
 
-- **End-to-End 3D Translation:** Operates directly on volumetric NIfTI (`.nii` / `.nii.gz`) data preserving cross-slice 3D spatial correlations.
-- **3D U-Net Generator with Skip Connections:** Incorporates dynamic center-cropping to handle spatial dimension alignments seamlessly.
-- **3D PatchGAN Discriminator:** Evaluates paired condition-image volumes $(CBCT, CT)$ and penalizes high-frequency structural errors.
-- **Medical Image Augmentations with TorchIO:** 3D geometric transforms (random flips across LR, AP, IS axes) and intensity transforms (bias fields, blur, noise, gamma).
-- **GPU Memory Optimization:**
-  - PyTorch Mixed Precision (`torch.cuda.amp.autocast` + `GradScaler`)
-  - Activation / Gradient Checkpointing (`torch.utils.checkpoint`)
-  - Dynamic tensor matching and sub-volume downscaling support
-- **Automated Metric Evaluation:** Generates 3D SSIM, PSNR, MAE, and MSE scores, exporting summaries to Excel (`.xlsx`) and visual trend plots (`.png`).
+- **Volumetric 3D Translation**: Directly processes 3D NIfTI volumes (`.nii` / `.nii.gz`) preserving spatial continuity across axial, sagittal, and coronal planes.
+- **3D U-Net Generator**: Incorporates residual/convolutional blocks, group normalization, and dynamic spatial center-cropping for skip connections.
+- **3D PatchGAN Discriminator**: Operates on concatenated pairs `(CBCT, CT)` to penalize structural and high-frequency discrepancies.
+- **Medical Image Augmentations**: Built-in 3D geometric transformations (random flips across LR, AP, IS axes) and intensity transforms (bias field, blur, noise, gamma) using TorchIO.
+- **Memory Efficiency**: Includes PyTorch Automatic Mixed Precision (AMP), gradient checkpointing (`torch.utils.checkpoint`), and sub-volume downscaling support.
+- **Quantitative Evaluation Suite**: Computes 3D SSIM, PSNR, MAE, and MSE across generated volumes, saving summaries to Excel (`.xlsx`) and trend plots (`.png`).
 
 ---
 
-## 🏗️ Model Architecture
+## Model Architecture
 
 ### Generator
-- **Type:** 3D U-Net encoder-decoder with skip connections.
-- **Building Blocks:** 3D Convolution $\rightarrow$ Group Normalization (`nn.GroupNorm`) $\rightarrow$ LeakyReLU ($0.2$).
-- **Downsampling:** MaxPool3D ($2\times2\times2$).
-- **Upsampling:** ConvTranspose3D (stride 2) + dynamic spatial center-cropping of skip connections.
-- **Loss:** Composite loss combining Adversarial Loss ($\mathcal{L}_{cGAN}$) with weighted L1 Reconstruction Loss ($\lambda \mathcal{L}_{L1}$ where $\lambda = 20$).
+- **Structure**: 3D U-Net encoder-decoder network with skip connections.
+- **Convolutions**: 3D Conv with Group Normalization (`nn.GroupNorm`) and LeakyReLU activations ($\alpha = 0.2$).
+- **Downsampling**: MaxPool3D ($2 \times 2 \times 2$).
+- **Upsampling**: ConvTranspose3D (stride 2) paired with spatial center-cropping to match skip connection tensor shapes.
+- **Objective**: Combined Adversarial Loss ($\mathcal{L}_{cGAN}$) and weighted L1 Reconstruction Loss ($\lambda \mathcal{L}_{L1}$ with $\lambda = 20$).
 
 ### Discriminator
-- **Type:** 3D PatchGAN Classifier.
-- **Input:** 2-channel concatenated 3D volume `(Input CBCT, Target CT / Synthetic CT)`.
-- **Loss:** Binary Cross Entropy with Logits (`BCEWithLogitsLoss`).
+- **Structure**: 3D PatchGAN classifier.
+- **Input**: 2-channel concatenated 3D volume `[Condition CBCT, Target CT / Fake CT]`.
+- **Loss**: Binary Cross-Entropy with Logits (`nn.BCEWithLogitsLoss`).
 
 ---
 
-## 📂 Project Structure
+## Project Structure
 
 ```text
-├── dataloader.py          # PyTorch Dataset & TorchIO 3D augmentation pipeline
-├── model.py               # 3D Generator, 3D Discriminator, and helper blocks
-├── parser.py              # CLI Argument parser for training & architecture config
-├── train.py               # Main training script with mixed-precision & loss logging
-├── test.py / transfer.py  # Inference scripts for synthesizing CT volumes from CBCT
-├── centercrop.ipynb       # Notebook for preprocessing & center-cropping NIfTI volumes
-├── evaluation.ipynb       # Quantitative evaluation (SSIM, PSNR, MAE, MSE) & plotting
-├── imports.ipynb          # Environment validation notebook
-├── model_01/              # Model artifacts, checkpoints (generator01.pth) & metrics
-├── model_02/              # Additional training experiment runs & loss curves
-├── .gitignore             # Ignored checkpoint files and temporary caches
-└── README.md              # Project documentation
+├── dataloader.py          # PyTorch Dataset implementation with TorchIO augmentations
+├── model.py               # 3D Generator, 3D Discriminator, and GAN wrapper classes
+├── parser.py              # Command-line argument definitions and hyperparameter defaults
+├── train.py               # Model training script with mixed-precision and visual logging
+├── test.py / transfer.py  # Inference scripts for synthesizing CT volumes from CBCT scans
+├── centercrop.ipynb       # Jupyter notebook for volume center-cropping and alignment
+├── evaluation.ipynb       # Evaluation script for computing SSIM, PSNR, MAE, and MSE
+├── imports.ipynb          # Environment verification notebook
+├── model_01/              # Saved model weights (generator01.pth) and metric outputs
+├── model_02/              # Experiment checkpoints and loss plots
+├── .gitignore             # Git ignore patterns
+└── README.md              # Documentation
 ```
 
 ---
 
-## ⚙️ Requirements & Installation
+## Requirements and Installation
 
 ### Prerequisites
-- Python 3.8+
-- CUDA-compatible GPU (Recommended $\ge 8\text{ GB}$ VRAM)
-- PyTorch with CUDA support
+- Python 3.8 or higher
+- NVIDIA GPU with CUDA support (Recommended: 8 GB+ VRAM)
+- PyTorch matching your CUDA runtime
 
-### Install Dependencies
+### Setup Environment
 
 ```bash
+# Install PyTorch (adjust CUDA version if necessary)
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+
+# Install core medical imaging and data processing libraries
 pip install SimpleITK nibabel torchio scikit-image numpy pandas matplotlib openpyxl tqdm
 ```
 
 ---
 
-## 📊 Dataset Preparation
+## Dataset Preparation
 
-The pipeline expects paired 3D NIfTI volumes (`.nii` or `.nii.gz`).
+The pipeline processes paired 3D volumes in NIfTI format (`.nii` or `.nii.gz`).
 
-### Recommended Directory Layout:
+### Recommended Directory Structure:
 ```text
 croped_dataset/
-├── TRAINCBCTSIMULATED/      # Source Domain B (CBCT volumes, e.g., REC-001.nii)
-├── TRAINCTAlignedToCBCT/    # Target Domain A (CT volumes, e.g., volume-001.nii)
-├── TESTCBCTSTIMULATED/      # Test Source Domain B (CBCT volumes for inference)
-└── TESTCTAlignedToCBCT/     # Test Target Domain A (Ground truth for evaluation)
+├── TRAINCBCTSIMULATED/      # Source Domain B (CBCT scans, e.g., REC-001.nii)
+├── TRAINCTAlignedToCBCT/    # Target Domain A (Ground truth CT scans, e.g., volume-001.nii)
+├── TESTCBCTSTIMULATED/      # Test Source Domain B (CBCT scans for inference)
+└── TESTCTAlignedToCBCT/     # Test Target Domain A (CT scans for evaluation)
 ```
 
-> **Note on Splitters:** The `splitterA` and `splitterB` arguments in `parser.py` are used to extract matching numeric volume IDs (e.g. `REC-1.nii` $\rightarrow$ `splitter='REC-'` $\rightarrow$ ID `1`).
+The `splitterA` and `splitterB` arguments in `parser.py` allow extracting corresponding sample indices from filenames (for example: `REC-1.nii` with splitter `REC-` maps to index `1`).
 
 ---
 
-## 🚀 Usage Guide
+## Usage Guide
 
 ### 1. Data Preprocessing
-If paired volumes have differing field of views (FOV) or dimensions, use `centercrop.ipynb` to crop the larger volumes to match the target dimensions.
+If paired volumes have inconsistent fields of view (FOV) or bounding boxes, run `centercrop.ipynb` to center-crop volumes to consistent dimensions prior to training.
 
 ---
 
-### 2. Training the Model
+### 2. Model Training
 
-Run `train.py` with custom arguments or defaults:
+Start model training using `train.py`:
 
 ```bash
 python train.py \
@@ -148,24 +145,24 @@ python train.py \
   -name "generator01"
 ```
 
-#### Key Arguments:
+#### Common Arguments:
 | Argument | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `-pathA` | `str` | `../croped_dataset/TRAINCTAlignedToCBCT` | Path to target ground truth CTs |
+| `-pathA` | `str` | `../croped_dataset/TRAINCTAlignedToCBCT` | Path to target ground-truth CTs |
 | `-pathB` | `str` | `../croped_dataset/TRAINCBCTSIMULATED` | Path to input condition CBCTs |
-| `-dimensions` | `int list` | `366 288 364` | 3D Volume shape `(D, H, W)` |
-| `--filterN` | `int list` | `32 64 128 256` | Generator layer filter counts |
-| `-epochs` | `int` | `10` | Number of training epochs |
-| `-learnRate` | `float` | `0.0002` | Adam optimizer learning rate |
-| `-downscale` | `flag` | `False` | Downsample volumes by $2\times$ to fit small GPUs |
-| `-augRngThreshold` | `float` | `0.5` | Probability threshold for 3D augmentations |
-| `-name` | `str` | `generator01` | Saved model weights filename prefix |
+| `-dimensions` | `int list` | `366 288 364` | Volume dimensions `[Depth, Height, Width]` |
+| `--filterN` | `int list` | `32 64 128 256` | Number of filters per layer in the generator |
+| `-epochs` | `int` | `10` | Total training epochs |
+| `-learnRate` | `float` | `0.0002` | Learning rate for Adam optimizers |
+| `-downscale` | `flag` | `False` | Downsample volumes by a factor of 2 during loading |
+| `-augRngThreshold` | `float` | `0.5` | Probability of applying 3D data augmentations |
+| `-name` | `str` | `generator01` | Filename prefix for saved generator checkpoints |
 
 ---
 
-### 3. Inference / Volume Synthesis
+### 3. Inference and Volume Synthesis
 
-Generate enhanced synthetic CT scans from input CBCT scans using `test.py` (or `transfer.py`):
+To generate enhanced CT volumes from unseen CBCT scans:
 
 ```bash
 python test.py \
@@ -176,49 +173,51 @@ python test.py \
   -pathOutput "model_01/Generated_Test_CT"
 ```
 
-Synthesized volumes are saved directly as `.nii` files ready for 3D Slicer, ITK-SNAP, or downstream contouring/planning tools.
+The output volumes are saved as standard `.nii` files and can be visualized in 3D medical viewers such as 3D Slicer or ITK-SNAP.
 
 ---
 
-### 4. Evaluation & Quantitative Metrics
+### 4. Evaluation and Quantitative Metrics
 
-Open and run `evaluation.ipynb` to compare generated CT volumes with real ground truth CT volumes:
-1. Computes **SSIM**, **PSNR**, **MAE**, and **MSE** across all 3D volumes.
-2. Exports all results to an Excel spreadsheet (`similarity_metrics.xlsx`).
-3. Plots metric trends per sample (`metric_trends.png`).
+Run `evaluation.ipynb` to evaluate the synthesized CT volumes against the real ground-truth CT volumes:
+1. Calculates **SSIM**, **PSNR**, **MAE**, and **MSE** on a per-volume basis.
+2. Exports all results to `similarity_metrics.xlsx`.
+3. Plots metric distributions and trends across samples (`metric_trends.png`).
 
 ```python
-# Metrics computed per volume pair
+# Metric calculation per volume pair
 metrics = compute_3d_metrics(real_ct_volume, generated_ct_volume)
-# Returns: {'SSIM': 0.9421, 'PSNR': 31.45, 'MAE': 0.0124, 'MSE': 0.0008}
+# Output: {'SSIM': 0.9421, 'PSNR': 31.45, 'MAE': 0.0124, 'MSE': 0.0008}
 ```
 
 ---
 
-## 📈 Evaluation Metrics & Results
+## Evaluation Metrics and Results
 
-The enhanced CT volumes are quantitatively evaluated against target CT scans using standard image quality metrics:
+The enhanced CT volumes are evaluated using standard quantitative image metrics:
 
-- **Structural Similarity Index (SSIM):** Measures luminance, contrast, and structural similarity in 3D.
-- **Peak Signal-to-Noise Ratio (PSNR):** Evaluates overall fidelity and noise suppression in decibels (dB).
-- **Mean Absolute Error (MAE) & Mean Squared Error (MSE):** Measures voxel-level intensity differences.
+- **Structural Similarity Index Measure (SSIM)**: Evaluates structural, luminance, and contrast similarity in 3D.
+- **Peak Signal-to-Noise Ratio (PSNR)**: Measures reconstruction fidelity and noise reduction in dB.
+- **Mean Absolute Error (MAE) & Mean Squared Error (MSE)**: Measures voxel-level intensity differences.
 
-Loss curves during training and per-subject metric distributions are saved in each experiment's folder (`model_01/`, `model_02/`).
-
----
-
-## 🧠 Memory Optimization & GPU Setup
-
-Volumetric 3D networks require substantial GPU memory. This repository implements several strategies to fit large 3D scans:
-1. **PyTorch Mixed Precision (AMP):** Utilizes `torch.cuda.amp.autocast()` and `GradScaler()` to halve activation memory.
-2. **Gradient Checkpointing:** Recomputes encoder and bottleneck activations during the backward pass using `torch.utils.checkpoint`.
-3. **Group Normalization:** Uses `nn.GroupNorm` instead of BatchNorm to remain stable with a batch size of 1.
-4. **CUDA Memory Fragmentation Control:** Configured with `PYTORCH_CUDA_ALLOC_CONF="max_split_size_mb:64"`.
-5. **Optional Downscaling:** Use `-downscale` in `parser.py` if running on GPUs with $<8\text{ GB}$ VRAM.
+Loss curves and metrics across training iterations are saved inside the respective model checkpoint directories (`model_01/`, `model_02/`).
 
 ---
 
-## 📄 License & Acknowledgments
+## Memory Optimization and Hardware Notes
 
-- Built with [PyTorch](https://pytorch.org/), [SimpleITK](https://simpleitk.org/), and [TorchIO](https://torchio.readthedocs.io/).
-- Inspired by the Pix2Pix / Vox2Vox conditional GAN architecture for medical image synthesis.
+Training 3D convolutional networks on volumetric medical data requires substantial VRAM. The following optimizations are enabled in this repository:
+1. **Mixed Precision (AMP)**: Uses `torch.cuda.amp.autocast()` and `GradScaler()` to reduce memory footprint.
+2. **Gradient Checkpointing**: Recomputes intermediate encoder activations on-the-fly during backpropagation via `torch.utils.checkpoint`.
+3. **Group Normalization**: Employs `nn.GroupNorm` to ensure stable convergence with small batch sizes (`batch_size=1`).
+4. **Memory Allocator Configuration**: Configured with `PYTORCH_CUDA_ALLOC_CONF="max_split_size_mb:64"` to mitigate fragmentation.
+5. **Downscaling Flag**: Set `-downscale` if training on memory-constrained GPUs.
+
+---
+
+## References and Acknowledgments
+
+- PyTorch: https://pytorch.org/
+- SimpleITK: https://simpleitk.org/
+- TorchIO (Medical Image Augmentation): https://torchio.readthedocs.io/
+- Pix2Pix / Vox2Vox conditional GAN architecture for medical image synthesis.
